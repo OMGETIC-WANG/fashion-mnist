@@ -11,6 +11,9 @@ import typing as T
 import lossplot
 import ascii_util
 
+from ml_collections import config_flags
+from absl import app
+
 
 @nnx.scan(in_axes=(nnx.Carry, 0, 0), out_axes=(nnx.Carry, 0))
 @nnx.jit
@@ -86,21 +89,30 @@ def BatchDatas(xs: T.Sequence[jax.Array], batch_size: int):
     return [x.reshape(x.shape[0] // batch_size, batch_size, *x.shape[1:]) for x in xs]
 
 
-(x_train, y_train), (x_test, y_test) = mnist_loader.LoadFashionMnist()
-
-rngs = nnx.Rngs(666)
-model = MnistModel(64, 1, 1, 32, rngs)
-optimizer = nnx.Optimizer(model, optax.adam(0.0001), wrt=nnx.Param)
-
-EPOCH_COUNT = 100
-TRAIN_BATCH_SIZE = 20
-TEST_BATCH_SIZE = TRAIN_BATCH_SIZE
-Train(
-    model,
-    optimizer,
-    *BatchDatas([x_train, y_train], TRAIN_BATCH_SIZE),
-    epoch_count=EPOCH_COUNT,
+_CONFIG = config_flags.DEFINE_config_file(
+    "config", "config.py", "Configuration file for training the model."
 )
-print(
-    f"Test accuracy: {TestModel(model, *BatchDatas([x_test, y_test], TEST_BATCH_SIZE)) * 100:.4f}%"
-)
+
+
+def main(_):
+    config = _CONFIG.value
+
+    rngs = nnx.Rngs(config.seed)
+    model = MnistModel(
+        config.model_features, config.num_encoders, config.num_decoders, config.target_seq_len, rngs
+    )
+    optimizer = nnx.Optimizer(model, optax.adam(config.learning_rate), wrt=nnx.Param)
+    (x_train, y_train), (x_test, y_test) = mnist_loader.LoadFashionMnist()
+    Train(
+        model,
+        optimizer,
+        *BatchDatas([x_train, y_train], config.train_batch_size),
+        epoch_count=config.epoch_count,
+    )
+    print(
+        f"Test accuracy: {TestModel(model, *BatchDatas([x_test, y_test], config.test_batch_size)) * 100:.4f}%"
+    )
+
+
+if __name__ == "__main__":
+    app.run(main)
