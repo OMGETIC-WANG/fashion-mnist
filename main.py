@@ -98,9 +98,7 @@ def main(_):
     config = _CONFIG.value
 
     rngs = nnx.Rngs(config.seed)
-    model = MnistModel(
-        config.model_features, config.num_encoders, config.num_decoders, config.target_seq_len, rngs
-    )
+    model = MnistModel(config.model_features, config.num_encoders, rngs)
     optimizer = nnx.Optimizer(model, optax.adam(config.learning_rate), wrt=nnx.Param)
     (x_train, y_train), (x_test, y_test) = mnist_loader.LoadFashionMnist()
     Train(

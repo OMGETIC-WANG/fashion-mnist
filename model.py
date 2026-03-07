@@ -36,7 +36,9 @@ class MLP(nnx.Module):
 class PreCNN(nnx.Module):
     def __init__(self, model_features: int, rngs: nnx.Rngs):
         self.layers = nnx.List[T.Callable[[jax.Array], jax.Array]]([
-            nnx.Conv(1, model_features, (3, 3), strides=2, padding="SAME", rngs=rngs),
+            nnx.Conv(1, model_features // 2, (3, 3), padding="VALID", rngs=rngs),
+            nnx.leaky_relu,
+            nnx.Conv(model_features // 2, model_features, (3, 3), padding="VALID", rngs=rngs),
             nnx.leaky_relu,
         ])
         self.model_features = model_features
@@ -68,86 +70,26 @@ class TransformerBlock(nnx.Module):
         return x + y
 
 
-class Decoder(nnx.Module):
-    def __init__(self, in_features: int, num_heads: int, rngs: nnx.Rngs):
-        self.attention = nnx.MultiHeadAttention(
-            num_heads,
-            in_features,
-            use_bias=False,
-            rngs=rngs,
-            kernel_init=nnx.initializers.xavier_uniform(),
-            decode=False,
-        )
-
-        self.fnn = MLP(
-            in_features, in_features, [in_features * 4, in_features * 4], nnx.gelu, rngs=rngs
-        )
-
-        self.pre_attention_norm = nnx.LayerNorm(in_features, rngs=rngs)
-        self.pre_fnn_norm = nnx.LayerNorm(in_features, rngs=rngs)
-
-    def Attention(self, x: jax.Array, memory: jax.Array):
-        return self.attention(x, memory, memory)
-
-    def __call__(self, x: jax.Array, memory: jax.Array):
-        x = x + self.Attention(self.pre_attention_norm(x), memory)
-        y = self.fnn(self.pre_fnn_norm(x))
-        return x + y
-
-
-class TargetQueries(nnx.Module):
-    def __init__(self, num_targets: int, target_seq_len: int, target_features: int, rngs: nnx.Rngs):
-        self._queries = nnx.Param(
-            nnx.initializers.uniform()(
-                rngs.params(), (num_targets, target_seq_len, target_features)
-            )
-        )
-        self._output_weight = nnx.Param(
-            nnx.initializers.uniform()(
-                rngs.params(), (num_targets, target_seq_len, target_features)
-            )
-        )
-        self.seq_len = target_seq_len
-        self.features = target_features
-
-    @property
-    def queries(self):
-        return self._queries.value
-
-    @property
-    def output_weight(self):
-        return self._output_weight.value
-
-    def ApplyOutputWeight(self, x: jax.Array, target: int):
-        return jnp.einsum("bsf,sf->bs", x, self.output_weight[target])
-
-    def __call__(self, target: jax.Array):
-        return self._queries[target]
-
-
 class MnistModel(nnx.Module):
     def __init__(
         self,
         model_features: int,
         num_encoder: int,
-        num_decoder: int,
-        target_seq_len: int,
         rngs: nnx.Rngs,
     ):
         self.cnn = PreCNN(model_features, rngs)
         self.encoders = nnx.List([
             TransformerBlock(model_features, 4, rngs) for _ in range(num_encoder)
         ])
-        self.decoders = nnx.List([Decoder(model_features, 4, rngs) for _ in range(num_decoder)])
-        self.target_queries = TargetQueries(10, target_seq_len, model_features, rngs)
-        self.target_logits_mlp = MLP(
-            target_seq_len, 1, [target_seq_len * 4, target_seq_len * 4], nnx.leaky_relu, rngs
-        )
 
         _, seqlen, _ = jax.eval_shape(lambda: self.cnn(jnp.zeros((1, 28, 28, 1)))).shape
         self.pos_embedding = nnx.Param(
             nnx.initializers.uniform()(rngs.params(), (seqlen, model_features))
         )
+        self.seq_elem_weights = nnx.Param(
+            nnx.initializers.uniform()(rngs.params(), (seqlen, model_features))
+        )
+        self.target_logits_mlp = MLP(seqlen, 10, [seqlen * 4, seqlen * 4], nnx.leaky_relu, rngs)
 
         self.model_features = model_features
 
@@ -155,23 +97,9 @@ class MnistModel(nnx.Module):
         x = self.cnn(x)
         batch_size, input_seq_len, _ = x.shape
         x += self.pos_embedding[:input_seq_len][None, ...]
+
         for encoder in self.encoders:
             x = encoder(x)
 
-        def apply_decoder(seq: jax.Array):
-            seq = jnp.full((batch_size, *seq.shape), seq)
-            for decoder in self.decoders:
-                seq = decoder(seq, x)
-            return seq
-
-        decoder_target_queries = nnx.vmap(apply_decoder)(self.target_queries.queries).reshape(
-            10, batch_size, self.target_queries.seq_len, self.model_features
-        )
-
-        def apply_target_weights(target, seqs: jax.Array):
-            return self.target_queries.ApplyOutputWeight(seqs, target)
-
-        mlp_inputs = jax.vmap(apply_target_weights)(jnp.arange(10), decoder_target_queries)
-
-        logits = nnx.vmap(lambda x: self.target_logits_mlp(x))(mlp_inputs)
-        return logits.reshape(10, batch_size).transpose()
+        x = jnp.einsum("bsf,sf->bs", x, self.seq_elem_weights)
+        return self.target_logits_mlp(x)

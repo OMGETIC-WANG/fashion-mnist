@@ -8,8 +8,6 @@ def get_config():
 
     config.model_features = 64
     config.num_encoders = 1
-    config.num_decoders = 1
-    config.target_seq_len = 32
 
     config.train_batch_size = 32
     config.epoch_count = 100
