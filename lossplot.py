@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.axes
 
 
 class _Line:
@@ -14,22 +15,49 @@ class _Line:
         self.line.set_data(self.xdata, self.ydata)
 
 
-class LossPlot:
-    def __init__(self, title: str = "Loss plot"):
-        self.figure, self.axes = plt.subplots()
-        self.figure.suptitle(title)
-        self.lines: dict[str, _Line] = {}
+class _Subplot:
+    def __init__(self, axes: matplotlib.axes.Axes, title: str, value_names: list[str]):
+        self.axes = axes
+        self.axes.set_title(title)
+        self.lines: dict[str, _Line] = {name: _Line(axes, name) for name in value_names}
+
+        self.last_update_x = -1
+
+    def Update(self, x: int, values: dict[str, float]):
+        self.last_update_x = x
+        for name, line in self.lines.items():
+            if name in values:
+                line.Add(x, values[name])
+
+    def AutoScale(self, x: int):
+        if self.last_update_x == x:
+            self.axes.relim()
+            self.axes.autoscale_view()
+
+
+class Dashboard:
+    # @example Dashboard("My Dashboard",{"Loss":["loss"],"Accuracy":["train_accuracy","test_accuracy"]})
+    def __init__(
+        self,
+        title: str,
+        value_sets: dict[str, list[str]],
+        figsize: tuple[float, float] = plt.rcParams["figure.figsize"],
+    ):
+        plt.ion()
+        self.fig = plt.figure(figsize=figsize)
+        self.fig.suptitle(title)
+        self.subplots: list[_Subplot] = []
+        for i, (name, value_names) in enumerate(value_sets.items()):
+            plot = self.fig.add_subplot(1, len(value_sets), i + 1)
+            self.subplots.append(_Subplot(plot, name, value_names))
         self.xvalue = 0
-        plt.pause(0.001)
 
-    def Update(self, vals: dict[str, float]):
+    def Update(self, values: dict[str, float]):
         self.xvalue += 1
-        for line, val in vals.items():
-            if not line in self.lines:
-                self.lines[line] = _Line(self.axes, line)
-            self.lines[line].Add(self.xvalue, val)
-        self.axes.relim()
-        self.axes.autoscale_view()
+        for subplot in self.subplots:
+            subplot.Update(self.xvalue, values)
+        for subplot in self.subplots:
+            subplot.AutoScale(self.xvalue)
 
-        self.figure.canvas.draw_idle()
-        self.figure.canvas.flush_events()
+        self.fig.canvas.draw_idle()
+        self.fig.canvas.flush_events()

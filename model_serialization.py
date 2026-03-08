@@ -29,7 +29,7 @@ def LoadModel(path: pathlib.Path | str, model_init: T.Callable[[], Model_t]) -> 
         model = model_init()
         return nnx.split(model)
 
-    graphdef, _ = jax.eval_shape(abstract_init)
+    graphdef, _ = nnx.eval_shape(abstract_init)
 
     with open(path, "rb") as f:
         flattened = pickle.load(f)
