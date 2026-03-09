@@ -38,31 +38,34 @@ def LoadMnist() -> tuple[tuple[jax.Array, jax.Array], tuple[jax.Array, jax.Array
     return (x_train, y_train), (x_test, y_test)
 
 
+# @detail Download <file> to <dataset_path>/<kaggle_download_dir>, save npz to <npz_cache_path>, and return (x, y) as jax.Array.
 def _LoadFashionMnistFromKaggle(
-    path: str, dataset_path: str, cache_path: str
+    file: str,
+    kaggle_download_dir: str,
+    npz_cache_path: str,
 ) -> tuple[jax.Array, jax.Array]:
-    filepath = os.path.join(dataset_path, path)
-    if not os.path.exists(filepath):
-        success = False
-        for i in range(4):
-            try:
-                kagglehub.dataset_download(
-                    "zalando-research/fashionmnist",
-                    path=path,
-                    output_dir=dataset_path,
-                )
-                success = True
-                break
-            except Exception as e:
-                print(f"Retry {i + 1}/4: {e}")
-        if not success:
-            raise FileNotFoundError(f"Failed to download {path} after multiple attempts.")
+    success = False
+    for i in range(4):
+        try:
+            filepath = kagglehub.dataset_download(
+                "zalando-research/fashionmnist",
+                path=file,
+                output_dir=kaggle_download_dir,
+            )
+            success = True
+            break
+        except Exception as e:
+            print(f"Retry {i + 1}/4: {e}")
+    if not success:
+        raise FileNotFoundError(f"Failed to download {file} after multiple attempts.")
 
-    df = pd.read_csv(filepath)
+    df = pd.read_csv(filepath)  # type: ignore
     x_raw = df.iloc[:, 1:].values.astype(np.uint8)
     y_raw = df.iloc[:, 0].values.astype(np.uint8)
 
-    np.savez(cache_path, x=np.array(x_raw), y=np.array(y_raw))
+    np.savez(npz_cache_path, x=np.array(x_raw), y=np.array(y_raw))
+
+    os.system(f"rm -r {kaggle_download_dir}")
 
     x = jnp.array(x_raw, dtype=jnp.float32) / 255.0
     y = jnp.array(y_raw, dtype=jnp.int32)
@@ -80,7 +83,7 @@ def _LoadFashionMnistSerialized(
             y_train = jnp.array(data["y"])
     else:
         x_train, y_train = _LoadFashionMnistFromKaggle(
-            kaggle_path, dataset_path, train_serialized_path
+            kaggle_path, os.path.join(dataset_path, "kaggle-download"), train_serialized_path
         )
     return x_train, y_train
 
